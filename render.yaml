@@ -24,6 +24,6 @@ services:
       - key: SMTP_PORT
         value: "465"
       - key: MAIL_SENDING_ENABLED
-        value: "false"
+        value: "true"
       - key: MAIL_DAILY_SEND_LIMIT
         value: "50"
