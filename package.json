@@ -1,0 +1,31 @@
+{
+  "name": "mail-assistant",
+  "version": "0.1.0",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node dist/index.mjs",
+    "build": "esbuild server/index.ts --bundle --platform=node --format=esm --packages=external --outfile=dist/index.mjs",
+    "check": "tsc",
+    "test": "tsx --test tests/*.test.ts"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.32.2",
+    "express": "^5.0.1",
+    "express-rate-limit": "8.7.1",
+    "helmet": "8.3.0",
+    "imapflow": "^1.0.190",
+    "mailparser": "^3.7.2",
+    "nodemailer": "^6.9.16"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.0",
+    "@types/mailparser": "^3.4.5",
+    "@types/node": "20.19.27",
+    "@types/nodemailer": "^6.4.17",
+    "esbuild": "^0.25.0",
+    "tsx": "^4.20.5",
+    "typescript": "5.6.3"
+  }
+}
