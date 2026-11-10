@@ -1,0 +1,29 @@
+services:
+  - type: web
+    name: mail-assistant
+    runtime: docker
+    plan: starter
+    region: frankfurt
+    numInstances: 1
+    dockerfilePath: ./Dockerfile
+    autoDeployTrigger: "off"
+    healthCheckPath: /healthz
+    envVars:
+      - key: MAIL_USER
+        sync: false
+      - key: MAIL_PASS
+        sync: false
+      - key: MCP_API_TOKEN
+        generateValue: true
+      - key: IMAP_HOST
+        value: mail.runbox.com
+      - key: IMAP_PORT
+        value: "993"
+      - key: SMTP_HOST
+        value: mail.runbox.com
+      - key: SMTP_PORT
+        value: "465"
+      - key: MAIL_SENDING_ENABLED
+        value: "false"
+      - key: MAIL_DAILY_SEND_LIMIT
+        value: "50"
