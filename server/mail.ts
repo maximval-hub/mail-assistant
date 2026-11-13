@@ -21,7 +21,8 @@ export type MessageBody = Summary & {
   cc: string; inReplyTo: string | null; references: string[]; text: string; truncated: boolean;
   attachments: { filename: string | null; contentType: string; size: number }[];
 };
-export type Outgoing = { to: string[]; cc: string[]; subject: string; text: string; inReplyTo?: string };
+export type Sender = { name?: string; address: string };
+export type Outgoing = { from?: Sender; to: string[]; cc: string[]; subject: string; text: string; inReplyTo?: string };
 export type Folder = { path: string; specialUse: string | null; messages: number | null; unseen: number | null };
 
 export interface MailBackend {
@@ -120,7 +121,7 @@ export class ImapSmtpBackend implements MailBackend {
 
   private mailOptions(m: Outgoing, messageId: string) {
     return {
-      from: this.cfg.from, to: m.to, cc: m.cc.length ? m.cc : undefined, subject: m.subject, text: m.text,
+      from: m.from ?? this.cfg.from, to: m.to, cc: m.cc.length ? m.cc : undefined, subject: m.subject, text: m.text,
       messageId, date: new Date(),
       ...(m.inReplyTo ? { inReplyTo: m.inReplyTo, references: m.inReplyTo } : {}),
     };
@@ -129,8 +130,8 @@ export class ImapSmtpBackend implements MailBackend {
     return new Promise((resolve, reject) =>
       new MailComposer(opts).compile().build((e: Error | null, b: Buffer) => (e ? reject(e) : resolve(b))));
   }
-  private newMessageId() {
-    const domain = this.cfg.from.match(/@([^>\s]+)/)?.[1] ?? "localhost";
+  private newMessageId(from?: Sender) {
+    const domain = (from?.address ?? this.cfg.from).match(/@([^>\s]+)/)?.[1] ?? "localhost";
     return `<${randomUUID()}@${domain}>`;
   }
   private async folderBySpecialUse(c: ImapFlow, use: string, fallback: string[]) {
@@ -140,7 +141,7 @@ export class ImapSmtpBackend implements MailBackend {
   }
 
   async saveDraft(m: Outgoing) {
-    const raw = await this.raw(this.mailOptions(m, this.newMessageId()));
+    const raw = await this.raw(this.mailOptions(m, this.newMessageId(m.from)));
     return this.withImap(async c => {
       const folder = await this.folderBySpecialUse(c, "\\Drafts", ["drafts", "draft"]);
       if (!folder) throw new Error("NO_DRAFTS_FOLDER");
@@ -150,7 +151,7 @@ export class ImapSmtpBackend implements MailBackend {
   }
 
   async send(m: Outgoing) {
-    const messageId = this.newMessageId();
+    const messageId = this.newMessageId(m.from);
     const opts = this.mailOptions(m, messageId);
     const transport = nodemailer.createTransport({
       host: this.cfg.smtpHost, port: this.cfg.smtpPort, secure: this.cfg.smtpPort === 465,

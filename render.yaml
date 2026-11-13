@@ -27,3 +27,5 @@ services:
         value: "true"
       - key: MAIL_DAILY_SEND_LIMIT
         value: "50"
+      - key: MAIL_ALLOWED_FROM
+        value: "Natan Horwitz <natanh@runbox.com>"
