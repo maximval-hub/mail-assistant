@@ -5,9 +5,10 @@ import rateLimit from "express-rate-limit";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
-import type { MailBackend, Outgoing } from "./mail";
+import type { MailBackend, Outgoing, Sender } from "./mail";
 
-export type Settings = { sendingEnabled: boolean; dailySendLimit: number; account: string };
+/** senders[0] is the default; only addresses in this list can ever appear in From. */
+export type Settings = { sendingEnabled: boolean; dailySendLimit: number; account: string; senders: Sender[] };
 export type State = { sentToday: { day: string; count: number }; requests: Map<string, unknown> };
 export const newState = (): State => ({ sentToday: { day: "", count: 0 }, requests: new Map() });
 type Result = { status: number; body: unknown };
@@ -30,8 +31,26 @@ const text = (v: unknown, max: number) => (typeof v === "string" && v.length > 0
 const noCrlf = (s: string) => !/[\r\n\0]/.test(s);
 const isoDate = (v: unknown) => (typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v) && !isNaN(Date.parse(v)) ? v : undefined);
 
-/** Validates recipients/subject/text. Header injection (CR/LF) is rejected, never sanitised silently. */
-export function parseOutgoing(a: Record<string, unknown>): Outgoing | string {
+/** Parses "addr" or "Name <addr>" from configuration. Quotes, brackets and CR/LF in the name are refused. */
+export function parseSender(raw: string): Sender | undefined {
+  const v = raw.trim();
+  if (!v || v.length > 300 || !noCrlf(v)) return undefined;
+  const m = v.match(/^([^<>"\\]*?)\s*<([^<>]+)>$/);
+  const address = (m ? m[2] : v).trim(), name = m ? m[1].trim() : "";
+  if (address.length > 254 || !EMAIL.test(address)) return undefined;
+  return name ? { name, address } : { address };
+}
+export const senderHeader = (s: Sender) => (s.name ? `${s.name} <${s.address}>` : s.address);
+
+/** Validates recipients/subject/text and the sender. Header injection (CR/LF) is rejected, never sanitised silently. */
+export function parseOutgoing(a: Record<string, unknown>, senders: Sender[]): Outgoing | string {
+  let from = senders[0];
+  if (a.from !== undefined) {
+    const want = typeof a.from === "string" ? a.from.trim().toLowerCase() : "";
+    const hit = senders.find(s => s.address.toLowerCase() === want);
+    if (!hit) return "SENDER_NOT_ALLOWED";
+    from = hit;
+  }
   const list = (v: unknown): string[] | undefined =>
     v === undefined ? [] : Array.isArray(v) && v.length <= 10 && v.every(x => typeof x === "string" && x.length <= 254 && noCrlf(x) && EMAIL.test(x))
       ? (v as string[]).map(x => x.trim()) : undefined;
@@ -48,14 +67,15 @@ export function parseOutgoing(a: Record<string, unknown>): Outgoing | string {
     inReplyTo = text(a.inReplyTo, 500);
     if (!inReplyTo || !noCrlf(inReplyTo) || !/^<[^<>\s]+>$/.test(inReplyTo)) return "INVALID_IN_REPLY_TO";
   }
-  return { to, cc, subject, text: body, ...(inReplyTo ? { inReplyTo } : {}) };
+  return { from, to, cc, subject, text: body, ...(inReplyTo ? { inReplyTo } : {}) };
 }
 
-/** Digest over exactly what will be sent, so approval of the shown draft binds to the sent message. */
-export const digestOf = (m: Outgoing, from: string) =>
-  createHash("sha256").update(JSON.stringify({ from, to: m.to, cc: m.cc, subject: m.subject, text: m.text, inReplyTo: m.inReplyTo ?? null })).digest("hex");
+/** Digest over exactly what will be sent, sender included, so approval of the shown draft binds to the sent message. */
+export const digestOf = (m: Outgoing) =>
+  createHash("sha256").update(JSON.stringify({ from: m.from ? senderHeader(m.from) : null, to: m.to, cc: m.cc, subject: m.subject, text: m.text, inReplyTo: m.inReplyTo ?? null })).digest("hex");
 
 const outSchema = {
+  from: { type: "string", maxLength: 254, description: "Sender address; optional, defaults to the account address. Must be one of the allowedSenders that get_access lists." },
   to: { type: "array", items: { type: "string", maxLength: 254 }, minItems: 1, maxItems: 10 },
   cc: { type: "array", items: { type: "string", maxLength: 254 }, maxItems: 10 },
   subject: { type: "string", maxLength: 300 },
@@ -66,9 +86,9 @@ const outSchema = {
 export function mcpTools(sendingExposed: boolean): Tool[] {
   const tools: Tool[] = [
     { name: "get_access", title: "Access and limits",
-      description: "Shows the mailbox account, whether sending is enabled and the daily send limit.",
+      description: "Shows the mailbox account, the sender addresses allowed in from, whether sending is enabled and the daily send limit.",
       inputSchema: obj(), annotations: read,
-      run: (_a, { settings, state }) => ({ status: 200, body: { account: settings.account, canRead: true, canCreateDrafts: true,
+      run: (_a, { settings, state }) => ({ status: 200, body: { account: settings.account, allowedSenders: settings.senders.map(senderHeader), canRead: true, canCreateDrafts: true,
         sendingEnabled: settings.sendingEnabled, dailySendLimit: settings.dailySendLimit,
         sentToday: state.sentToday.day === new Date().toISOString().slice(0, 10) ? state.sentToday.count : 0,
         requiresExplicitUserInstruction: true } }) },
@@ -103,28 +123,28 @@ export function mcpTools(sendingExposed: boolean): Tool[] {
         return m ? { status: 200, body: m } : { status: 404, body: { error: "MESSAGE_NOT_FOUND" } };
       } },
     { name: "create_draft", title: "Prepare an email",
-      description: "Saves a draft in the mailbox's Drafts folder; nothing is sent. Returns the exact message and a digest; show them to the user. The digest is required later by send_message.",
+      description: "Saves a draft in the mailbox's Drafts folder; nothing is sent. Optional from picks one of the allowed sender addresses (get_access). Returns the exact message, sender included, and a digest; show them to the user. The digest is required later by send_message.",
       inputSchema: obj(outSchema, ["to", "subject", "text"]),
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
       run: async (a, { backend, settings }) => {
-        const m = parseOutgoing(a);
+        const m = parseOutgoing(a, settings.senders);
         if (typeof m === "string") return bad(m);
         const saved = await backend.saveDraft(m);
-        return { status: 200, body: { from: settings.account, ...m, digest: digestOf(m, settings.account), draftFolder: saved.folder, draftUid: saved.uid, sent: false } };
+        return { status: 200, body: { ...m, from: senderHeader(m.from!), digest: digestOf(m), draftFolder: saved.folder, draftUid: saved.uid, sent: false } };
       } },
   ];
   if (sendingExposed) tools.push({
     name: "send_message", title: "Send an email",
-    description: "Sends an email from the owner's mailbox. Only call after the user explicitly asked to send this exact message to these exact recipients and approved it. to, cc, subject, text and inReplyTo must be identical to the draft; digest is the value create_draft returned. userRequestId identifies the user's instruction; reuse it only to retry the same message, which is then never sent twice.",
+    description: "Sends an email from the owner's mailbox. Only call after the user explicitly asked to send this exact message to these exact recipients and approved it. from, to, cc, subject, text and inReplyTo must be identical to the draft; digest is the value create_draft returned. userRequestId identifies the user's instruction; reuse it only to retry the same message, which is then never sent twice.",
     inputSchema: obj({ ...outSchema, digest: { type: "string", pattern: "^[a-f0-9]{64}$" },
       userRequestId: { type: "string", maxLength: 200, pattern: "^[A-Za-z0-9_:/#.-]+$" } }, ["to", "subject", "text", "digest", "userRequestId"]),
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
     run: async (a, { backend, settings, state }) => {
       const { digest, userRequestId, ...rest } = a;
-      const m = parseOutgoing(rest);
+      const m = parseOutgoing(rest, settings.senders);
       if (typeof m === "string") return bad(m);
       if (typeof digest !== "string" || typeof userRequestId !== "string" || !/^[A-Za-z0-9_:/#.-]{1,200}$/.test(userRequestId)) return bad("INVALID_REQUEST");
-      if (digest !== digestOf(m, settings.account)) return { status: 409, body: { error: "DIGEST_MISMATCH" } };
+      if (digest !== digestOf(m)) return { status: 409, body: { error: "DIGEST_MISMATCH" } };
       const key = `${userRequestId}:${digest}`;
       if (state.requests.has(key)) return { status: 200, body: { ...(state.requests.get(key) as object), duplicate: true } };
       const day = new Date().toISOString().slice(0, 10);
@@ -135,7 +155,7 @@ export function mcpTools(sendingExposed: boolean): Tool[] {
       state.requests.set(key, { state: "in_progress" });
       try {
         const r = await backend.send(m);
-        const body = { state: "sent", ...r };
+        const body = { state: "sent", from: senderHeader(m.from!), ...r };
         state.requests.set(key, body);
         return { status: 200, body };
       } catch {
