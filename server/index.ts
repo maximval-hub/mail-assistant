@@ -1,5 +1,5 @@
 import { createApp } from "./app";
-import { ImapSmtpBackend } from "./mail";
+import { ImapSmtpBackend, parseUnipileAccounts } from "./mail";
 
 const env = process.env;
 const missing = ["MAIL_USER", "MAIL_PASS", "MCP_API_TOKEN"].filter(k => !env[k]);
@@ -16,6 +16,8 @@ const backend = new ImapSmtpBackend({
   user: env.MAIL_USER!, pass: env.MAIL_PASS!, from: env.MAIL_FROM || env.MAIL_USER!,
   imapHost: env.IMAP_HOST || "mail.runbox.com", imapPort: port("IMAP_PORT", 993),
   smtpHost: env.SMTP_HOST || "mail.runbox.com", smtpPort: port("SMTP_PORT", 465),
+  ...(env.UNIPILE_DSN && env.UNIPILE_API_KEY && env.UNIPILE_ACCOUNTS
+    ? { unipile: { dsn: env.UNIPILE_DSN, apiKey: env.UNIPILE_API_KEY, accounts: parseUnipileAccounts(env.UNIPILE_ACCOUNTS) } } : {}),
 });
 try {
   const { app } = createApp(env, backend);

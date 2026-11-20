@@ -13,6 +13,8 @@ Personal IMAP/SMTP mailbox exposed to Claude as a remote MCP server (custom conn
 | `MCP_API_TOKEN` | 32+ chars; the value of the connector's `x-api-key` header |
 | `IMAP_HOST`/`IMAP_PORT`, `SMTP_HOST`/`SMTP_PORT` | Default `mail.runbox.com` 993 / 465 (implicit TLS) |
 | `MAIL_FROM` | Optional, defaults to `MAIL_USER` |
+| `UNIPILE_DSN`, `UNIPILE_API_KEY`, `UNIPILE_ACCOUNTS` | Optional. `UNIPILE_ACCOUNTS=natanh@runbox.com=<account_id>`: mail with that `from` goes out through Unipile (`POST /api/v1/emails`) instead of SMTP. Listed addresses become allowed senders |
+| `MAIL_ALIASES` | Optional extra allowed `from` addresses sent through the normal SMTP login |
 | `MAIL_SENDING_ENABLED` | Default `false` |
 | `MAIL_DAILY_SEND_LIMIT` | Default 50 |
 

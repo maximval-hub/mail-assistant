@@ -27,3 +27,9 @@ services:
         value: "true"
       - key: MAIL_DAILY_SEND_LIMIT
         value: "50"
+      - key: UNIPILE_DSN
+        sync: false
+      - key: UNIPILE_API_KEY
+        sync: false
+      - key: UNIPILE_ACCOUNTS
+        sync: false

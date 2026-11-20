@@ -5,10 +5,25 @@ import MailComposer from "nodemailer/lib/mail-composer/index.js";
 import { simpleParser } from "mailparser";
 import { randomUUID } from "node:crypto";
 
+export type UnipileConfig = { dsn: string; apiKey: string; accounts: Record<string, string> };
 export type MailConfig = {
   user: string; pass: string; from: string;
   imapHost: string; imapPort: number; smtpHost: string; smtpPort: number;
+  unipile?: UnipileConfig;
 };
+
+/** UNIPILE_ACCOUNTS="natanh@runbox.com=<unipile account_id>,other@x.y=<id>" -> { "natanh@runbox.com": "<id>" } (addresses lower-cased). */
+export function parseUnipileAccounts(raw: string | undefined): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const part of (raw ?? "").split(",").map(x => x.trim()).filter(Boolean)) {
+    const i = part.indexOf("=");
+    const addr = part.slice(0, i).trim().toLowerCase(), id = part.slice(i + 1).trim();
+    if (i < 1 || !/^[^\s<>@]+@[^\s<>@]+\.[^\s<>@]+$/.test(addr) || !/^[A-Za-z0-9_-]{4,100}$/.test(id)) throw Error("UNIPILE_ACCOUNTS must look like address=account_id,address=account_id");
+    out[addr] = id;
+  }
+  return out;
+}
+const escapeHtml = (t: string) => t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 export type Summary = {
   uid: number; folder: string; from: string; to: string; subject: string;
   date: string | null; seen: boolean; messageId: string | null;
@@ -21,7 +36,7 @@ export type MessageBody = Summary & {
   cc: string; inReplyTo: string | null; references: string[]; text: string; truncated: boolean;
   attachments: { filename: string | null; contentType: string; size: number }[];
 };
-export type Outgoing = { to: string[]; cc: string[]; subject: string; text: string; inReplyTo?: string };
+export type Outgoing = { to: string[]; cc: string[]; subject: string; text: string; inReplyTo?: string; from?: string };
 export type Folder = { path: string; specialUse: string | null; messages: number | null; unseen: number | null };
 
 export interface MailBackend {
@@ -29,7 +44,7 @@ export interface MailBackend {
   search(q: SearchQuery): Promise<{ total: number; messages: Summary[] }>;
   read(folder: string, uid: number, maxChars: number): Promise<MessageBody | null>;
   saveDraft(m: Outgoing): Promise<{ folder: string; uid: number | null }>;
-  send(m: Outgoing): Promise<{ messageId: string; accepted: string[]; rejected: string[]; savedToSent: boolean }>;
+  send(m: Outgoing): Promise<{ messageId: string; accepted: string[]; rejected: string[]; savedToSent: boolean; via?: string }>;
 }
 
 const addr = (a: any): string =>
@@ -120,7 +135,7 @@ export class ImapSmtpBackend implements MailBackend {
 
   private mailOptions(m: Outgoing, messageId: string) {
     return {
-      from: this.cfg.from, to: m.to, cc: m.cc.length ? m.cc : undefined, subject: m.subject, text: m.text,
+      from: m.from ?? this.cfg.from, to: m.to, cc: m.cc.length ? m.cc : undefined, subject: m.subject, text: m.text,
       messageId, date: new Date(),
       ...(m.inReplyTo ? { inReplyTo: m.inReplyTo, references: m.inReplyTo } : {}),
     };
@@ -129,8 +144,8 @@ export class ImapSmtpBackend implements MailBackend {
     return new Promise((resolve, reject) =>
       new MailComposer(opts).compile().build((e: Error | null, b: Buffer) => (e ? reject(e) : resolve(b))));
   }
-  private newMessageId() {
-    const domain = this.cfg.from.match(/@([^>\s]+)/)?.[1] ?? "localhost";
+  private newMessageId(from: string = this.cfg.from) {
+    const domain = from.match(/@([^>\s]+)/)?.[1] ?? "localhost";
     return `<${randomUUID()}@${domain}>`;
   }
   private async folderBySpecialUse(c: ImapFlow, use: string, fallback: string[]) {
@@ -140,7 +155,7 @@ export class ImapSmtpBackend implements MailBackend {
   }
 
   async saveDraft(m: Outgoing) {
-    const raw = await this.raw(this.mailOptions(m, this.newMessageId()));
+    const raw = await this.raw(this.mailOptions(m, this.newMessageId(m.from)));
     return this.withImap(async c => {
       const folder = await this.folderBySpecialUse(c, "\\Drafts", ["drafts", "draft"]);
       if (!folder) throw new Error("NO_DRAFTS_FOLDER");
@@ -149,8 +164,28 @@ export class ImapSmtpBackend implements MailBackend {
     });
   }
 
+  /** Sends through a Unipile-linked account. Unipile files the copy in that account's own Sent folder. */
+  private async sendViaUnipile(m: Outgoing, accountId: string) {
+    const u = this.cfg.unipile!;
+    const base = /^https?:\/\//.test(u.dsn) ? u.dsn : `https://${u.dsn}`;
+    const person = (identifier: string) => ({ identifier });
+    const r = await fetch(`${base.replace(/\/+$/, "")}/api/v1/emails`, {
+      method: "POST", signal: AbortSignal.timeout(30_000),
+      headers: { "X-API-KEY": u.apiKey, "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({
+        account_id: accountId, to: m.to.map(person), ...(m.cc.length ? { cc: m.cc.map(person) } : {}),
+        subject: m.subject, body: `<div style="white-space:pre-wrap">${escapeHtml(m.text)}</div>`,
+      }),
+    });
+    if (!r.ok) throw new Error(`UNIPILE_${r.status}`);
+    const j: any = await r.json().catch(() => ({}));
+    return { messageId: String(j.email_id ?? j.tracking_id ?? j.id ?? ""), accepted: [...m.to, ...m.cc], rejected: [] as string[], savedToSent: false, via: "unipile" };
+  }
+
   async send(m: Outgoing) {
-    const messageId = this.newMessageId();
+    const accountId = m.from && this.cfg.unipile?.accounts[m.from.toLowerCase()];
+    if (accountId) return this.sendViaUnipile(m, accountId);
+    const messageId = this.newMessageId(m.from);
     const opts = this.mailOptions(m, messageId);
     const transport = nodemailer.createTransport({
       host: this.cfg.smtpHost, port: this.cfg.smtpPort, secure: this.cfg.smtpPort === 465,
@@ -168,7 +203,7 @@ export class ImapSmtpBackend implements MailBackend {
     } catch { /* keep savedToSent=false */ }
     return {
       messageId: info.messageId || messageId,
-      accepted: (info.accepted as any[]).map(String), rejected: (info.rejected as any[]).map(String), savedToSent,
+      accepted: (info.accepted as any[]).map(String), rejected: (info.rejected as any[]).map(String), savedToSent, via: "smtp",
     };
   }
 }
