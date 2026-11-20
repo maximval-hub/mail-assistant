@@ -177,7 +177,12 @@ export class ImapSmtpBackend implements MailBackend {
         subject: m.subject, body: `<div style="white-space:pre-wrap">${escapeHtml(m.text)}</div>`,
       }),
     });
-    if (!r.ok) throw new Error(`UNIPILE_${r.status}`);
+    if (!r.ok) {
+      // Status and Unipile's error text only (no keys, no message content), so a failed send can be diagnosed from the Render logs.
+      const detail = (await r.text().catch(() => "")).replace(/\s+/g, " ").slice(0, 300);
+      console.error(`Unipile send failed: HTTP ${r.status} ${detail}`);
+      throw new Error(`UNIPILE_${r.status}`);
+    }
     const j: any = await r.json().catch(() => ({}));
     return { messageId: String(j.email_id ?? j.tracking_id ?? j.id ?? ""), accepted: [...m.to, ...m.cc], rejected: [] as string[], savedToSent: false, via: "unipile" };
   }
