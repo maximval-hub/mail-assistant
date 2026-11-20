@@ -125,3 +125,34 @@ test("startup refuses a short token or a token equal to the mailbox password", (
   assert.throws(() => createApp(env({ MCP_API_TOKEN: "short" }), f.backend));
   assert.throws(() => createApp(env({ MCP_API_TOKEN: "p".repeat(20) + "p".repeat(20), MAIL_PASS: "p".repeat(40) }), f.backend));
 });
+
+test("from: only allowed senders, digest binds the sender, default stays the main address", async () => {
+  const t = await boot(env({ MAIL_SENDING_ENABLED: "true", UNIPILE_ACCOUNTS: "Natanh@Runbox.com=acc_123456", MAIL_ALIASES: "alias@example.com" }));
+  try {
+    assert.deepEqual((await t.call("get_access")).body.extraSenders, ["alias@example.com", "natanh@runbox.com"]);
+    assert.equal((await t.call("create_draft", { ...msg, from: "evil@x.y" })).body.error, "INVALID_FROM");
+    const main = (await t.call("create_draft", msg)).body;
+    const alias = (await t.call("create_draft", { ...msg, from: "NATANH@runbox.com" })).body;
+    assert.equal(alias.from, "natanh@runbox.com"); assert.notEqual(alias.digest, main.digest);
+    assert.equal((await t.call("send_message", { ...msg, from: "natanh@runbox.com", digest: main.digest, userRequestId: "a1" })).body.status, 409);
+    assert.equal((await t.call("send_message", { ...msg, from: "natanh@runbox.com", digest: alias.digest, userRequestId: "a2" })).body.state, "sent");
+  } finally { t.close(); }
+});
+
+test("Unipile route posts to /api/v1/emails for the mapped account only", async () => {
+  const { ImapSmtpBackend } = await import("../server/mail");
+  const seen: any[] = [];
+  const real = globalThis.fetch;
+  globalThis.fetch = (async (url: any, init: any) => { seen.push({ url: String(url), init }); return new Response(JSON.stringify({ object: "EmailSent", email_id: "e1" }), { status: 200 }); }) as any;
+  try {
+    const b = new ImapSmtpBackend({ user: "u", pass: "p", from: "me@example.com", imapHost: "h", imapPort: 993, smtpHost: "h", smtpPort: 465,
+      unipile: { dsn: "api1.unipile.com:13301", apiKey: "K", accounts: { "natanh@runbox.com": "acc_123456" } } });
+    const r = await b.send({ to: ["a@b.c"], cc: [], subject: "S", text: "x < y", from: "natanh@runbox.com" });
+    assert.equal(r.via, "unipile"); assert.equal(r.messageId, "e1");
+    assert.equal(seen[0].url, "https://api1.unipile.com:13301/api/v1/emails");
+    assert.equal(seen[0].init.headers["X-API-KEY"], "K");
+    const body = JSON.parse(seen[0].init.body);
+    assert.deepEqual([body.account_id, body.to, body.subject, body.from], ["acc_123456", [{ identifier: "a@b.c" }], "S", { identifier: "natanh@runbox.com" }]);
+    assert.ok(body.body.includes("x &lt; y"));
+  } finally { globalThis.fetch = real; }
+});

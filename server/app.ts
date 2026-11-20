@@ -1,12 +1,15 @@
 import express from "express";
 import helmet from "helmet";
-import type { MailBackend } from "./mail";
+import { parseUnipileAccounts, type MailBackend } from "./mail";
 import { setupMcp, type Settings } from "./mcp";
 
 export function settingsFromEnv(env: NodeJS.ProcessEnv): Settings {
   const limit = Number(env.MAIL_DAILY_SEND_LIMIT || 50);
   if (!Number.isInteger(limit) || limit < 1 || limit > 500) throw Error("MAIL_DAILY_SEND_LIMIT must be an integer 1-500");
-  return { sendingEnabled: env.MAIL_SENDING_ENABLED === "true", dailySendLimit: limit, account: env.MAIL_FROM || env.MAIL_USER || "" };
+  const aliases = (env.MAIL_ALIASES ?? "").split(",").map(x => x.trim().toLowerCase()).filter(Boolean);
+  if (aliases.some(a => !/^[^\s<>@]+@[^\s<>@]+\.[^\s<>@]+$/.test(a))) throw Error("MAIL_ALIASES must be a comma-separated list of addresses");
+  const senders = [...new Set([...aliases, ...Object.keys(parseUnipileAccounts(env.UNIPILE_ACCOUNTS))])];
+  return { sendingEnabled: env.MAIL_SENDING_ENABLED === "true", dailySendLimit: limit, account: env.MAIL_FROM || env.MAIL_USER || "", senders };
 }
 
 export function createApp(env: NodeJS.ProcessEnv, backend: MailBackend) {
