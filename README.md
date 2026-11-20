@@ -14,6 +14,7 @@ Personal IMAP/SMTP mailbox exposed to Claude as a remote MCP server (custom conn
 | `IMAP_HOST`/`IMAP_PORT`, `SMTP_HOST`/`SMTP_PORT` | Default `mail.runbox.com` 993 / 465 (implicit TLS) |
 | `MAIL_FROM` | Optional, defaults to `MAIL_USER` |
 | `UNIPILE_DSN`, `UNIPILE_API_KEY`, `UNIPILE_ACCOUNTS` | Optional. `UNIPILE_ACCOUNTS=natanh@runbox.com=<account_id>`: mail with that `from` goes out through Unipile (`POST /api/v1/emails`, with `from` set to the alias) using the linked mailbox account, instead of SMTP. Listed addresses become allowed senders |
+| `MAIL_SENDER_NAMES` | Optional display names, `natanh@runbox.com=Natan Horwitz` (this one is the built-in default) |
 | `MAIL_ALIASES` | Optional extra allowed `from` addresses sent through the normal SMTP login |
 | `MAIL_SENDING_ENABLED` | Default `false` |
 | `MAIL_DAILY_SEND_LIMIT` | Default 50 |

@@ -10,6 +10,8 @@ export type MailConfig = {
   user: string; pass: string; from: string;
   imapHost: string; imapPort: number; smtpHost: string; smtpPort: number;
   unipile?: UnipileConfig;
+  /** Display names for alternative senders, keyed by lower-cased address. */
+  senderNames?: Record<string, string>;
 };
 
 /** UNIPILE_ACCOUNTS="natanh@runbox.com=<unipile account_id>,other@x.y=<id>" -> { "natanh@runbox.com": "<id>" } (addresses lower-cased). */
@@ -20,6 +22,17 @@ export function parseUnipileAccounts(raw: string | undefined): Record<string, st
     const addr = part.slice(0, i).trim().toLowerCase(), id = part.slice(i + 1).trim();
     if (i < 1 || !/^[^\s<>@]+@[^\s<>@]+\.[^\s<>@]+$/.test(addr) || !/^[A-Za-z0-9_-]{4,100}$/.test(id)) throw Error("UNIPILE_ACCOUNTS must look like address=account_id,address=account_id");
     out[addr] = id;
+  }
+  return out;
+}
+/** MAIL_SENDER_NAMES="natanh@runbox.com=Natan Horwitz,other@x.y=Other Name"; the built-in default keeps natanh@ named without extra setup. */
+export function parseSenderNames(raw: string | undefined): Record<string, string> {
+  const out: Record<string, string> = { "natanh@runbox.com": "Natan Horwitz" };
+  for (const part of (raw ?? "").split(",").map(x => x.trim()).filter(Boolean)) {
+    const i = part.indexOf("=");
+    const addr = part.slice(0, i).trim().toLowerCase(), name = part.slice(i + 1).trim();
+    if (i < 1 || !addr.includes("@") || !name || name.length > 100 || /[\r\n\0<>"]/.test(name)) throw Error("MAIL_SENDER_NAMES must look like address=Display Name,address=Display Name");
+    out[addr] = name;
   }
   return out;
 }
@@ -135,7 +148,7 @@ export class ImapSmtpBackend implements MailBackend {
 
   private mailOptions(m: Outgoing, messageId: string) {
     return {
-      from: m.from ?? this.cfg.from, to: m.to, cc: m.cc.length ? m.cc : undefined, subject: m.subject, text: m.text,
+      from: m.from ? (this.cfg.senderNames?.[m.from] ? { name: this.cfg.senderNames[m.from], address: m.from } : m.from) : this.cfg.from, to: m.to, cc: m.cc.length ? m.cc : undefined, subject: m.subject, text: m.text,
       messageId, date: new Date(),
       ...(m.inReplyTo ? { inReplyTo: m.inReplyTo, references: m.inReplyTo } : {}),
     };
@@ -173,7 +186,7 @@ export class ImapSmtpBackend implements MailBackend {
       method: "POST", signal: AbortSignal.timeout(30_000),
       headers: { "X-API-KEY": u.apiKey, "Content-Type": "application/json", Accept: "application/json" },
       body: JSON.stringify({
-        account_id: accountId, ...(m.from ? { from: { identifier: m.from } } : {}), to: m.to.map(person), ...(m.cc.length ? { cc: m.cc.map(person) } : {}),
+        account_id: accountId, ...(m.from ? { from: { identifier: m.from, ...(this.cfg.senderNames?.[m.from] ? { display_name: this.cfg.senderNames[m.from] } : {}) } } : {}), to: m.to.map(person), ...(m.cc.length ? { cc: m.cc.map(person) } : {}),
         subject: m.subject, body: `<div style="white-space:pre-wrap">${escapeHtml(m.text)}</div>`,
       }),
     });
