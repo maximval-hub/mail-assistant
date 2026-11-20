@@ -146,13 +146,13 @@ test("Unipile route posts to /api/v1/emails for the mapped account only", async 
   globalThis.fetch = (async (url: any, init: any) => { seen.push({ url: String(url), init }); return new Response(JSON.stringify({ object: "EmailSent", email_id: "e1" }), { status: 200 }); }) as any;
   try {
     const b = new ImapSmtpBackend({ user: "u", pass: "p", from: "me@example.com", imapHost: "h", imapPort: 993, smtpHost: "h", smtpPort: 465,
-      unipile: { dsn: "api1.unipile.com:13301", apiKey: "K", accounts: { "natanh@runbox.com": "acc_123456" } } });
+      unipile: { dsn: "api1.unipile.com:13301", apiKey: "K", accounts: { "natanh@runbox.com": "acc_123456" } }, senderNames: { "natanh@runbox.com": "Natan Horwitz" } });
     const r = await b.send({ to: ["a@b.c"], cc: [], subject: "S", text: "x < y", from: "natanh@runbox.com" });
     assert.equal(r.via, "unipile"); assert.equal(r.messageId, "e1");
     assert.equal(seen[0].url, "https://api1.unipile.com:13301/api/v1/emails");
     assert.equal(seen[0].init.headers["X-API-KEY"], "K");
     const body = JSON.parse(seen[0].init.body);
-    assert.deepEqual([body.account_id, body.to, body.subject, body.from], ["acc_123456", [{ identifier: "a@b.c" }], "S", { identifier: "natanh@runbox.com" }]);
+    assert.deepEqual([body.account_id, body.to, body.subject, body.from], ["acc_123456", [{ identifier: "a@b.c" }], "S", { identifier: "natanh@runbox.com", display_name: "Natan Horwitz" }]);
     assert.ok(body.body.includes("x &lt; y"));
   } finally { globalThis.fetch = real; }
 });
