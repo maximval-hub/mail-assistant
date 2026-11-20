@@ -152,7 +152,7 @@ test("Unipile route posts to /api/v1/emails for the mapped account only", async 
     assert.equal(seen[0].url, "https://api1.unipile.com:13301/api/v1/emails");
     assert.equal(seen[0].init.headers["X-API-KEY"], "K");
     const body = JSON.parse(seen[0].init.body);
-    assert.deepEqual([body.account_id, body.to, body.subject], ["acc_123456", [{ identifier: "a@b.c" }], "S"]);
+    assert.deepEqual([body.account_id, body.to, body.subject, body.from], ["acc_123456", [{ identifier: "a@b.c" }], "S", { identifier: "natanh@runbox.com" }]);
     assert.ok(body.body.includes("x &lt; y"));
   } finally { globalThis.fetch = real; }
 });

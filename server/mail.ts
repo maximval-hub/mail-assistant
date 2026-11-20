@@ -173,7 +173,7 @@ export class ImapSmtpBackend implements MailBackend {
       method: "POST", signal: AbortSignal.timeout(30_000),
       headers: { "X-API-KEY": u.apiKey, "Content-Type": "application/json", Accept: "application/json" },
       body: JSON.stringify({
-        account_id: accountId, to: m.to.map(person), ...(m.cc.length ? { cc: m.cc.map(person) } : {}),
+        account_id: accountId, ...(m.from ? { from: { identifier: m.from } } : {}), to: m.to.map(person), ...(m.cc.length ? { cc: m.cc.map(person) } : {}),
         subject: m.subject, body: `<div style="white-space:pre-wrap">${escapeHtml(m.text)}</div>`,
       }),
     });
