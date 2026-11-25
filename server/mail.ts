@@ -51,6 +51,7 @@ export type MessageBody = Summary & {
 };
 export type Outgoing = { to: string[]; cc: string[]; subject: string; text: string; inReplyTo?: string; from?: string };
 export type Folder = { path: string; specialUse: string | null; messages: number | null; unseen: number | null };
+export type TrashResult = { folder: string; trashFolder: string; moved: number[]; notFound: number[] };
 
 export interface MailBackend {
   folders(): Promise<Folder[]>;
@@ -58,6 +59,8 @@ export interface MailBackend {
   read(folder: string, uid: number, maxChars: number): Promise<MessageBody | null>;
   saveDraft(m: Outgoing): Promise<{ folder: string; uid: number | null }>;
   send(m: Outgoing): Promise<{ messageId: string; accepted: string[]; rejected: string[]; savedToSent: boolean; via?: string }>;
+  /** Moves the given UIDs of one folder to Trash. Never deletes permanently. */
+  trash(folder: string, uids: number[]): Promise<TrashResult>;
 }
 
 const addr = (a: any): string =>
@@ -165,6 +168,33 @@ export class ImapSmtpBackend implements MailBackend {
     const list = await c.list();
     return list.find(f => f.specialUse === use)?.path
       ?? list.find(f => fallback.includes(f.path.toLowerCase()))?.path ?? null;
+  }
+
+  async trash(folder: string, uids: number[]): Promise<TrashResult> {
+    return this.withImap(async c => {
+      const trashFolder = await this.folderBySpecialUse(c, "\\Trash", ["trash", "deleted messages", "deleted items"]);
+      if (!trashFolder) throw new Error("NO_TRASH_FOLDER");
+      if (trashFolder.toLowerCase() === folder.toLowerCase()) throw new Error("ALREADY_IN_TRASH");
+      const lock = await c.getMailboxLock(folder);
+      try {
+        // Only UIDs that exist in this folder are touched; nothing else is ever selected.
+        const found = ((await c.search({ uid: uids.join(",") }, { uid: true })) || []) as number[];
+        const moved = uids.filter(u => found.includes(u)), notFound = uids.filter(u => !found.includes(u));
+        if (!moved.length) return { folder, trashFolder, moved, notFound };
+        const range = moved.join(",");
+        if (c.capabilities.has("MOVE")) {
+          if (!(await c.messageMove(range, trashFolder, { uid: true }))) throw new Error("MOVE_FAILED");
+        } else if (c.capabilities.has("UIDPLUS")) {
+          // COPY first; flag and UID EXPUNGE only these UIDs, and only once the copy is confirmed.
+          if (!(await c.messageCopy(range, trashFolder, { uid: true }))) throw new Error("COPY_FAILED");
+          if (!(await c.messageDelete(range, { uid: true }))) throw new Error("EXPUNGE_FAILED");
+        } else {
+          // Plain EXPUNGE would also remove other messages already flagged \Deleted, so refuse.
+          throw new Error("NO_SAFE_MOVE");
+        }
+        return { folder, trashFolder, moved, notFound };
+      } finally { lock.release(); }
+    });
   }
 
   async saveDraft(m: Outgoing) {
