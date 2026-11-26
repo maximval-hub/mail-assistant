@@ -57,6 +57,8 @@ export interface MailBackend {
   search(q: SearchQuery): Promise<{ total: number; messages: Summary[] }>;
   read(folder: string, uid: number, maxChars: number): Promise<MessageBody | null>;
   saveDraft(m: Outgoing): Promise<{ folder: string; uid: number | null }>;
+  /** Moves one message to the Trash folder (never deletes permanently). null = message not found. */
+  trash(folder: string, uid: number): Promise<{ trashFolder: string; uid: number | null } | null>;
   send(m: Outgoing): Promise<{ messageId: string; accepted: string[]; rejected: string[]; savedToSent: boolean; via?: string }>;
 }
 
@@ -174,6 +176,20 @@ export class ImapSmtpBackend implements MailBackend {
       if (!folder) throw new Error("NO_DRAFTS_FOLDER");
       const r = await c.append(folder, raw, ["\\Draft", "\\Seen"]);
       return { folder, uid: r && typeof r === "object" && "uid" in r ? (r.uid as number) : null };
+    });
+  }
+
+  async trash(folder: string, uid: number) {
+    return this.withImap(async c => {
+      const trashFolder = await this.folderBySpecialUse(c, "\\Trash", ["trash", "deleted items", "deleted messages", "deleted"]);
+      if (!trashFolder) throw new Error("NO_TRASH_FOLDER");
+      if (trashFolder.toLowerCase() === folder.toLowerCase()) throw new Error("ALREADY_IN_TRASH");
+      const lock = await c.getMailboxLock(folder);
+      try {
+        const r = await c.messageMove(String(uid), trashFolder, { uid: true });
+        if (!r) return null;
+        return { trashFolder, uid: r.uidMap?.get(uid) ?? null };
+      } finally { lock.release(); }
     });
   }
 

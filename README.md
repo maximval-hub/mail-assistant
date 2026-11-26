@@ -2,7 +2,7 @@
 
 Personal IMAP/SMTP mailbox exposed to Claude as a remote MCP server (custom connector), in the same way as `telegram-assistant`.
 
-**Tools:** `get_access`, `list_folders`, `search_messages`, `read_message` (does not mark as read), `create_draft` (saves to Drafts, sends nothing), and `send_message` only when `MAIL_SENDING_ENABLED=true`.
+**Tools:** `get_access`, `list_folders`, `search_messages`, `read_message` (does not mark as read), `create_draft` (saves to Drafts, sends nothing), `trash_message` (moves one message to Trash; never deletes permanently), and `send_message` only when `MAIL_SENDING_ENABLED=true`.
 
 **Safety:** `send_message` needs the digest of the exact draft (to, cc, subject, text), a `userRequestId` (the same request is never sent twice, an unknown SMTP outcome is never retried) and respects `MAIL_DAILY_SEND_LIMIT`. CR/LF in headers is rejected. Mail content is untrusted data. Server errors are never echoed to the client.
 
