@@ -59,6 +59,8 @@ export interface MailBackend {
   saveDraft(m: Outgoing): Promise<{ folder: string; uid: number | null }>;
   /** Moves one message to the Trash folder (never deletes permanently). null = message not found. */
   trash(folder: string, uid: number): Promise<{ trashFolder: string; uid: number | null } | null>;
+  /** Moves one message to an existing folder. null = message not found. Throws UNKNOWN_FOLDER / SAME_FOLDER. */
+  move(folder: string, uid: number, target: string): Promise<{ targetFolder: string; uid: number | null } | null>;
   send(m: Outgoing): Promise<{ messageId: string; accepted: string[]; rejected: string[]; savedToSent: boolean; via?: string }>;
 }
 
@@ -189,6 +191,21 @@ export class ImapSmtpBackend implements MailBackend {
         const r = await c.messageMove(String(uid), trashFolder, { uid: true });
         if (!r) return null;
         return { trashFolder, uid: r.uidMap?.get(uid) ?? null };
+      } finally { lock.release(); }
+    });
+  }
+
+  async move(folder: string, uid: number, target: string) {
+    return this.withImap(async c => {
+      const list = await c.list();
+      const dest = list.find(f => f.path === target && !f.flags?.has("\\Noselect"));
+      if (!dest) throw new Error("UNKNOWN_FOLDER");
+      if (dest.path === folder) throw new Error("SAME_FOLDER");
+      const lock = await c.getMailboxLock(folder);
+      try {
+        const r = await c.messageMove(String(uid), dest.path, { uid: true });
+        if (!r) return null;
+        return { targetFolder: dest.path, uid: r.uidMap?.get(uid) ?? null };
       } finally { lock.release(); }
     });
   }
